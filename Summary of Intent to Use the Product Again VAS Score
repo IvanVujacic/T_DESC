@@ -1,0 +1,259 @@
+/* clear work datasets */
+%m_clear;
+/* create date and time macro variables */
+%m_dttim;
+/*program name*/
+%let prog=T020;
+/* open log file */
+proc printto log="&logtab.\&prog._&mdate..log" new;
+run;
+options source;
+/******************************************************************************************************************
+CLIENT/PROJECT    : RD 491/36234                      
+PURPOSE           : Table 14.6.1.1 Summary of Intent to Use the Product Again VAS Score (Safety Set)
+PROGRAM NAME      : T020                                            
+AUTHOR            : Ivan Vujacic                                                            
+DATE CREATED      : 22MAY2024
+DATASETS USED     : adam.adqs
+MACROS USED       : m_clear, m_dttim, logname, m_titles, m_close, m_rempgbrk
+DATASETS CREATED  : OUTTAB.T020
+NOTES             :                                                                                              
+*********************************************************************************************************************
+MODIFICATION HISTORY 
+DATE             :                                                               
+MODIFIED BY      :  
+NOTES            :  
+********************************************************************************************************************/
+options nosource nosymbolgen nomlogic nomprint ;
+******************************************************************************;
+%put			       ___ Macros ___;
+******************************************************************************;
+**round;
+%macro round(var=,dp=,n=,type=aval);
+	%if "&type"="aval" %then 
+		%do;
+		  	if aprecis = &dp then 
+				do;
+					if _&var ne . 
+						then &var.=strip(put(round(_&var.,1/(10**%eval(&dp+&n))),10.%eval(&dp+&n))); 
+					else &var.='';
+				end;
+		%end;
+	%else %if "&type"="chg" %then 
+		%do;
+		  	if aprecis = &dp then 
+				do;
+					if _&var ne . 
+						then &var.=strip(put(round(_&var.,1/(10**%eval(&dp+&n))),10.%eval(&dp+&n))); 
+					else &var.='';
+				end;
+		%end;
+%mend;
+
+%macro roundall(prec=);
+	  %round(var=meanaval  ,dp=&prec,n=1);
+	  %round(var=medianaval,dp=&prec,n=1);
+	  %round(var=sdaval    ,dp=&prec,n=2);
+/*	  %round(var=stderraval,dp=&prec,n=2);*/
+	  %round(var=minaval   ,dp=&prec,n=0);
+	  %round(var=maxaval   ,dp=&prec,n=0);
+
+/*	  %round(var=meanchg  ,dp=&prec,n=1,type=chg);*/
+/*	  %round(var=medianchg,dp=&prec,n=1,type=chg);*/
+/*	  %round(var=sdchg    ,dp=&prec,n=2,type=chg);*/
+/*	  %round(var=stderrchg,dp=&prec,n=2,type=chg);*/
+/*	  %round(var=minchg   ,dp=&prec,n=0,type=chg);*/
+/*	  %round(var=maxchg   ,dp=&prec,n=0,type=chg);*/
+%mend;
+******************************************************************************;
+*			       ___ Format for '(N=X') ___;
+******************************************************************************;
+proc sql noprint;
+	select count(distinct subjid) into :trtnA  trimmed from adam.adsl(where=(saffl='Y' and index(trtseqa,'A')));
+	select count(distinct subjid) into :trtnB  trimmed from adam.adsl(where=(saffl='Y' and index(trtseqa,'B')));
+	select count(distinct subjid) into :trtnC  trimmed from adam.adsl(where=(saffl='Y' and index(trtseqa,'C')));
+quit;
+%put
+	trtnA=&trtnA
+	trtnB=&trtnB
+	trtnC=&trtnC 
+;
+proc format;
+	value trtn
+		1="Product A (N=&trtnA.)"
+		2="Product B (N=&trtnB.)"
+		3="Product C (N=&trtnC.)"
+	;
+run;
+******************************************************************************;
+%put			       ___ Load Data ___;
+******************************************************************************;
+%let where=%nrstr(parcat1='VAS INTENT TO USE THE PRODUCT AGAIN');
+data work1;
+	set adam.adqs(where=(&where.));
+	 trt=put(trtan,trtn.); 
+run;
+*******************************************************************************;
+*			       ___ Compute Summary Statistics___;
+*******************************************************************************;
+%let by   =%nrstr(paramn param paramcd trtan trt atptn atpt aprecis);
+proc sort data=work1;
+	by &by adtm subjid;
+run;
+
+proc means data=work1 noprint;
+	by &by;
+	var aval 
+/*			chg*/
+	;
+	output out=work2
+		n(aval)     =_naval
+		mean(aval)  =_meanaval
+		std(aval)   =_sdaval
+		min(aval)   =_minaval
+		median(aval)=_medianaval
+		max(aval)   =_maxaval
+
+/*		n(chg)      =_nchg*/
+/*		mean(chg)   =_meanchg*/
+/*		std(chg)    =_sdchg*/
+/*		min(chg)    =_minchg*/
+/*		median(chg) =_medianchg*/
+/*		max(chg)    =_maxchg*/
+	;
+run;
+*******************************************************************************;
+*			       ___ Process Summary Statistics___;
+*******************************************************************************;
+data prefinal;
+	set work2;
+	if _naval ne .  then naval = strip(put(_naval,2.)); 
+/*  if _nchg  ne .  then nchg  = strip(put(_nchg,2.));  */
+	%roundall(prec=0);
+	%roundall(prec=1);
+	**Ck;
+	c1=trt;
+	c3=naval;
+	c4=meanaval;
+	c5=sdaval;
+	c6=minaval;
+	c7=medianaval;
+	c8=maxaval;
+	_page=1;
+	_gap='';
+run;
+
+******************************************************************************;
+%put			       ___ Finalmax and output datasets;
+******************************************************************************;
+%let by=paramn trtan atptn ;
+proc sort data=prefinal;
+	by &by.;
+run;
+%max_prod(in=prefinal,out=final);
+******************************************************************************;
+%put			       ___ Output Dataset ___;
+******************************************************************************;
+%let keep=
+	_gap _page
+	param
+	trtan c1 
+	atptn atpt
+	c3-c8
+;
+data &prog.;
+	retain &keep.;
+	set final;
+	keep &keep.;
+run;
+
+data outtab.&prog.;
+	set &prog.;
+run;
+
+**Macro variable for header;
+proc sql noprint;
+	select distinct param into :header trimmed from outtab.&prog.;
+quit;
+%put &header;
+
+******************************************************************************;
+*			       ___ Report Macro___;
+******************************************************************************;
+%macro m_report();
+proc report data=&prog. nowindows missing split='$' headskip spanrows headline style(report)={frame=void};
+	by _page;
+	column ("&header.&border.&left." _page 
+					 trtan c1 atptn atpt _gap
+					 c3 _gap c4 _gap c5 _gap c6 _gap c7 _gap c8
+	);
+
+  define _page     / order order=internal noprint;
+	define trtan    / order order=internal noprint;
+	define atptn     / order order=internal noprint;
+
+  define c1        / order order=internal style(column)={just=l asis=on cellwidth=6.1cm} style(header)={just=l} "Product";
+  define atpt      / display style(column)={just=l asis=on cellwidth=2.5cm} style(header)={just=l} "Time Point";
+	
+	define c3        / display style(column)={just=l asis=on cellwidth=2.5cm   pretext="~R'\tqdec\tx350 '"}
+										 style(header)={just=l} "n";
+	define c4        / display style(column)={just=l asis=on cellwidth=2.5cm   pretext="~R'\tqdec\tx350 '"}
+										 style(header)={just=l} "Mean";
+	define c5        / display style(column)={just=l asis=on cellwidth=2.5cm   pretext="~R'\tqdec\tx350 '"}
+										 style(header)={just=l} "SD";
+	define c6        / display style(column)={just=l asis=on cellwidth=2.5cm   pretext="~R'\tqdec\tx350 '"}
+										 style(header)={just=l} "Min";
+	define c7        / display style(column)={just=l asis=on cellwidth=2.5cm   pretext="~R'\tqdec\tx350 '"}
+										 style(header)={just=l} "Median";
+	define c8        / display style(column)={just=l asis=on cellwidth=2.5cm   pretext="~R'\tqdec\tx350 '"}
+										 style(header)={just=l} "Max";
+  define _gap      / display style(column)={just=l asis=on cellwidth=0.2cm} style(header)={just=l} "";
+
+  compute before _page;
+    line " ";
+  endcomp;
+
+  compute after c1;
+    line " ";
+  endcomp;
+
+  compute before _page_ / center;
+    line "&study";
+    line "&outnum";
+    line "&outnam1";
+    line "&outnam2";
+    line "";
+  endcomp;
+
+  compute after _page_ / style={just=left};
+    &tabhk; ** inserts listing house keeping footnote **;
+	  line "Product A: Ploom X and Tobacco Stick – EVO Gold; Product B: Ploom X and Tobacco Stick – EVO Tan; Product C: Combustible cigarettes.";
+ 		line "Response measured on a 100mm visual analogue scale (VAS) from 0 = “Definitely would not” to 100 = “Definitely would”.";
+  endcomp;
+run;
+%mend;
+******************************************************************************;
+*			       ___ RTF___;
+******************************************************************************;
+%let outnum =Table 14.6.1.1;
+%let outnam1=Summary of Intent to Use the Product Again VAS Score;
+%let outnam2=Safety Set;
+%let slist= %nrstr(16.2.14.1);
+*Report section*;
+%m_pageXofY(report=%nrstr(
+ods rtf file="&touttab.\&outnum. &outnam1..rtf" style=tfl; 
+ods listing close;
+	%m_report;
+ods rtf close; 
+ods listing; 
+));
+
+** run macro to create production copy without section breaks **;
+%m_rempgbrk(source=&touttab.\&outnum. &outnam1..rtf);
+
+proc printto;
+run;
+
+******************************************************************************;
+*			       ___ End of Program ___;
+******************************************************************************;
